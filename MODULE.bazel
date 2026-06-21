@@ -1,0 +1,43 @@
+# MCP Tool Catalog Integrity (MTCI) — Bazel module.
+#
+# Makes the MTCI Cargo workspace buildable via Bazel with no submodules and no
+# parent monorepo. The module sees only its own crates plus the crates.io deps
+# pinned in its own committed Cargo.lock.
+#
+#   Standalone:  bazel test //...
+#
+# Crate deps are exposed as `@crates_mtci//:<crate-name>`.
+
+module(
+    name = "mcp_tool_catalog_integrity",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.70.0")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+########################################
+# Rust toolchain — pinned to the workspace's required version.
+########################################
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.94.1"],
+)
+
+########################################
+# Cargo dependencies via crate_universe.
+########################################
+#
+# Reads this workspace's Cargo.toml + Cargo.lock and exposes every external
+# crate as `@crates_mtci//:<crate-name>`. The hub MUST be named `crates_mtci`
+# so the `@crates_mtci//:...` references in the per-crate BUILD files resolve.
+
+crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+crate.from_cargo(
+    name = "crates_mtci",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],
+)
+use_repo(crate, "crates_mtci")

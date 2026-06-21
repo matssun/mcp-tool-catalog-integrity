@@ -1,0 +1,18 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Bazel (build artifacts; symlinks point into ~/Library/Caches/bazel/)
+/bazel-bin
+/bazel-mcp_tool_catalog_integrity
+/bazel-out
+/bazel-testlogs
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo

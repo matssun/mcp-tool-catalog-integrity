@@ -1,0 +1,16 @@
+{
+  "package": "mcp_tool_catalog_integrity_repository_docs_package",
+  "created": "2026-06-21",
+  "license_policy": "Apache-2.0 for all included files unless otherwise stated",
+  "files": [
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY.md",
+    "docs/security-boundary.md",
+    "docs/adr/adr-mtci-001-scope-and-boundary.md",
+    "docs/spec/tool-catalog-integrity-profile.md"
+  ]
+}

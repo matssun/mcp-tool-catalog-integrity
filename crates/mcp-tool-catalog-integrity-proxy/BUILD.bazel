@@ -1,0 +1,28 @@
+load("@crates_mtci//:defs.bzl", "all_crate_deps")
+load("//bazel:defs.bzl", "nt_rust_library", "nt_rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# The interposer composes the pure core crate with an MCP transport. It depends
+# on `//crates/mcp-tool-catalog-integrity` plus the serde_json / thiserror subset
+# from the `crates_mtci` hub.
+nt_rust_library(
+    name = "mcp_tool_catalog_integrity_proxy",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "mcp_tool_catalog_integrity_proxy",
+    edition = "2021",
+    deps = [
+        "//crates/mcp-tool-catalog-integrity:mcp_tool_catalog_integrity",
+    ] + all_crate_deps(normal = True),
+)
+
+nt_rust_test(
+    name = "mcp_tool_catalog_integrity_proxy_test",
+    crate = ":mcp_tool_catalog_integrity_proxy",
+    auto_cargo_toml = False,
+    bazel_build_cfg = False,
+    edition = "2021",
+    deps = [
+        "//crates/mcp-tool-catalog-integrity:mcp_tool_catalog_integrity",
+    ] + all_crate_deps(normal_dev = True),
+)

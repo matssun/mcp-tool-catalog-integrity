@@ -1,0 +1,24 @@
+load("@crates_mtci//:defs.bzl", "all_crate_deps")
+load("//bazel:defs.bzl", "nt_rust_library", "nt_rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# The core crate stays pure (no networking / async / filesystem). Crate deps come
+# from the isolated `crates_mtci` crate_universe hub
+# (serde, serde_json, sha2, base64, thiserror; dev: hex, proptest).
+nt_rust_library(
+    name = "mcp_tool_catalog_integrity",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "mcp_tool_catalog_integrity",
+    edition = "2021",
+    deps = all_crate_deps(normal = True),
+)
+
+nt_rust_test(
+    name = "mcp_tool_catalog_integrity_test",
+    crate = ":mcp_tool_catalog_integrity",
+    auto_cargo_toml = False,
+    bazel_build_cfg = False,
+    edition = "2021",
+    deps = all_crate_deps(normal_dev = True),
+)

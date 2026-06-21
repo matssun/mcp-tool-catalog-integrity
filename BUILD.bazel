@@ -1,0 +1,20 @@
+# MCP Tool Catalog Integrity — Cargo workspace root.
+#
+# Per-crate BUILD.bazel files live under each member directory. These exports
+# let the isolated `crates_mtci` crate_universe hub reference the workspace
+# manifest AND lockfile.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.toml",
+    "Cargo.lock",
+])
+
+filegroup(
+    name = "workspace_files",
+    srcs = [
+        "Cargo.lock",
+        "Cargo.toml",
+    ],
+)

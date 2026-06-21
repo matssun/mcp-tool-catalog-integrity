@@ -1,0 +1,34 @@
+# MTCI supply-chain policy — cargo-deny.
+#
+# Authoritative supply-chain policy for the workspace, enforced in CI
+# (`cargo deny check {licenses,bans,sources,advisories}`), NOT by Bazel:
+# cargo-deny needs network access (advisory-DB fetch) and a prebuilt binary, so
+# it is a CI policy gate by design, not a hermetic Bazel test. It is deliberately
+# NOT added to any Cargo.toml and NOT pulled into the `crates_mtci` crate universe.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Apache-2.0 distribution target; allow the permissive licenses common to the
+# RustCrypto / serde ecosystems.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "ISC",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

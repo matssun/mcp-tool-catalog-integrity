@@ -1,0 +1,44 @@
+# MCP Tool Catalog Integrity (MTCI) — Cargo workspace root.
+#
+# An optional, clean-room MCP Tool Catalog Integrity Profile. It protects the
+# integrity of MCP tool catalog descriptors (the manifest a server advertises)
+# and can compose with MCP-S, but it does not define MCP message signing,
+# authorization, replay protection, host UX, tool safety classification, or
+# tool invocation policy. See docs/security-boundary.md and ADR-MTCI-001.
+#
+# This workspace is self-contained: it depends on no other in-repo crate. The
+# canonical hermetic build/test is `bazel test //...`; these Cargo manifests are
+# authoritative for rust-analyzer, local dev, and standalone publication.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/mcp-tool-catalog-integrity",       # Pure verification crate — no networking/async/fs.
+    "crates/mcp-tool-catalog-integrity-proxy", # Catalog-integrity interposer for an MCP transport.
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "Apache-2.0"
+authors = ["Mats Sundvall"]
+repository = "https://github.com/matssun/mcp-tool-catalog-integrity"
+
+# Shared dependency versions. The core crate uses only the pure subset
+# (serde / serde_json / sha2 / base64 / thiserror / hex); networking/async crates
+# are reserved for the proxy and MUST NOT be referenced by the core crate.
+# RustCrypto ecosystem — no custom crypto.
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+base64 = "0.22"
+thiserror = "1.0"
+hex = "0.4"
+# Dev-only property testing of the descriptor canonicalization / hashing invariants.
+proptest = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
