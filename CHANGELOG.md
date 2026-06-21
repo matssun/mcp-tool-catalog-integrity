@@ -11,7 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Initial workspace scaffold: `mcp-tool-catalog-integrity` (pure core) and
-  `mcp-tool-catalog-integrity-proxy` crates, dual Cargo + Bazel build.
+  `mcp-tool-catalog-integrity-interposer` crates, dual Cargo + Bazel build.
 - ADR-MTCI-001 (scope and boundary), the Tool Catalog Integrity Profile spec
   draft, and the signed-off-pending security boundary document.
 

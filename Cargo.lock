@@ -172,7 +172,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-tool-catalog-integrity-proxy"
+name = "mcp-tool-catalog-integrity-interposer"
 version = "0.1.0"
 dependencies = [
  "mcp-tool-catalog-integrity",
