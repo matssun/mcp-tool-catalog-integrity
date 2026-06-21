@@ -35,7 +35,13 @@ Before hashing, a tool descriptor MUST be reduced to a canonical byte string:
    Canonicalization Scheme, JCS): object members sorted by key, no insignificant
    whitespace, canonical number and string forms.
 
-Canonicalization MUST be **fail-closed**: any value outside the JCS-safe domain
+Numbers are handled per RFC 8785 as IEEE-754 doubles, serialized via the
+ECMAScript `Number::toString` algorithm; finite floats common in JSON Schema
+(e.g. `minimum`, `multipleOf`) are therefore accepted, while non-finite (NaN,
+±Infinity) and out-of-double-domain (overflow/underflow) values fail closed, and
+values requiring exact high precision MUST be encoded as strings (I-JSON).
+
+Canonicalization MUST be **fail-closed**: any value outside the JCS domain
 (e.g. non-finite numbers) MUST cause a canonicalization error, never a
 best-effort serialization.
 
