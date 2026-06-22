@@ -7,6 +7,9 @@ authors.workspace = true
 repository.workspace = true
 description = "MCP Tool Catalog Integrity interposer: observe tools/list results on an MCP transport and surface catalog drift."
 
+[features]
+file_pin_store = []
+
 [dependencies]
 mcp-tool-catalog-integrity = { path = "../mcp-tool-catalog-integrity" }
 serde_json = { workspace = true }
