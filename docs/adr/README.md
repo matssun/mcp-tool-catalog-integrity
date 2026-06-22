@@ -14,6 +14,7 @@ remain maintainable as the project evolves.
 | ID | Title |
 |---|---|
 | [ADR-MTCI-001](adr-mtci-001-scope-and-boundary.md) | Scope and Boundary — Tool Catalog Integrity, Separate from MCP-S Core |
+| [ADR-MTCI-002](adr-mtci-002-signed-catalog-attestation.md) | Signed Catalog Attestation — an Optional Tier Above TOFU (proposed; relocated from mcps ADR-MCPS-029) |
 
 ## Conventions
 
