@@ -7,9 +7,9 @@ package(default_visibility = ["//visibility:public"])
 # on `//crates/mcp-tool-catalog-integrity` plus the serde_json / thiserror subset
 # from the `crates_mtci` hub.
 nt_rust_library(
-    name = "mcp_tool_catalog_integrity_proxy",
+    name = "mcp_tool_catalog_integrity_interposer",
     srcs = glob(["src/**/*.rs"]),
-    crate_name = "mcp_tool_catalog_integrity_proxy",
+    crate_name = "mcp_tool_catalog_integrity_interposer",
     edition = "2021",
     deps = [
         "//crates/mcp-tool-catalog-integrity:mcp_tool_catalog_integrity",
@@ -17,8 +17,8 @@ nt_rust_library(
 )
 
 nt_rust_test(
-    name = "mcp_tool_catalog_integrity_proxy_test",
-    crate = ":mcp_tool_catalog_integrity_proxy",
+    name = "mcp_tool_catalog_integrity_interposer_test",
+    crate = ":mcp_tool_catalog_integrity_interposer",
     auto_cargo_toml = False,
     bazel_build_cfg = False,
     edition = "2021",

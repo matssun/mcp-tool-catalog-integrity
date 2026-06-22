@@ -14,7 +14,7 @@
 resolver = "2"
 members = [
     "crates/mcp-tool-catalog-integrity",       # Pure verification crate — no networking/async/fs.
-    "crates/mcp-tool-catalog-integrity-proxy", # Catalog-integrity interposer for an MCP transport.
+    "crates/mcp-tool-catalog-integrity-interposer", # Pure in-process catalog-integrity interposer (no transport/process/async).
 ]
 
 [workspace.package]
@@ -25,8 +25,8 @@ authors = ["Mats Sundvall"]
 repository = "https://github.com/matssun/mcp-tool-catalog-integrity"
 
 # Shared dependency versions. The core crate uses only the pure subset
-# (serde / serde_json / sha2 / base64 / thiserror / hex); networking/async crates
-# are reserved for the proxy and MUST NOT be referenced by the core crate.
+# (serde / serde_json / sha2 / base64 / thiserror / hex). The interposer is also
+# sync and dependency-light; it owns no transport, process, or async runtime.
 # RustCrypto ecosystem — no custom crypto.
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }

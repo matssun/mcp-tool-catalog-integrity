@@ -54,8 +54,8 @@ CHANGELOG.md               Release notes (Keep a Changelog format).
 Cargo.toml                 Workspace manifest.
 MODULE.bazel               Bazel module definition.
 
-crates/mcp-tool-catalog-integrity/        Pure verification crate (no networking/async/fs).
-crates/mcp-tool-catalog-integrity-proxy/  Catalog-integrity interposer for an MCP transport.
+crates/mcp-tool-catalog-integrity/             Pure verification crate (no networking/async/fs).
+crates/mcp-tool-catalog-integrity-interposer/  Pure in-process catalog-integrity interposer (no transport/process/async).
 
 docs/security-boundary.md  What MTCI protects (and what it explicitly does not).
 docs/adr/                  Architecture decision records (ADR-MTCI-NNN).
