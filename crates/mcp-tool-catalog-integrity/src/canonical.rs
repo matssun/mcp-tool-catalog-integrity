@@ -1,26 +1,42 @@
-//! In-house RFC 8785 (JCS) canonicalization with a fail-closed JCS-safe value
-//! domain (MCPS_SPEC §4 / ADR-MCPS-005).
+//! In-house RFC 8785 (JCS) canonicalization with a fail-closed value domain.
 //!
-//! This is the most security-critical unit in MCP-S: the entire signature
-//! scheme depends on a byte-identical preimage. We therefore do NOT depend on an
+//! This is the most security-critical unit in MTCI: the descriptor/catalog hash
+//! depends on a byte-identical preimage. We therefore do NOT depend on an
 //! external JCS crate — RFC 8785 canonicalization is implemented here so the
 //! preimage is fully auditable, and pinned by committed vectors.
 //!
-//! # JCS-safe domain (every violation => [`IntegrityError::Canonicalization`])
+//! # JCS domain (every violation => [`IntegrityError::Canonicalization`])
+//! MTCI implements **full RFC 8785 / JCS over I-JSON**: every JSON number is an
+//! IEEE-754 double, and any FINITE double is accepted and serialized via the
+//! ECMAScript `Number::toString` algorithm (RFC 8785 §3.2.2.3). The following
+//! fail closed:
 //! 1. **Duplicate object member names** within any object are rejected. We parse
 //!    the raw bytes with our own value model that surfaces duplicates — we do NOT
 //!    rely on `serde_json::Value`/`Map`, which silently keeps the last duplicate.
 //! 2. **Invalid UTF-8** in the input is rejected before parsing; **unpaired
 //!    surrogates** expressed via `\uXXXX` escapes are rejected during string
 //!    parsing.
-//! 3. **Numbers are integers only**, within ±(2^53 − 1) inclusive. Any fraction
-//!    (`1.5`), exponent (`1e3`), or out-of-range integer is rejected.
+//! 3. **Non-finite numbers** (NaN, ±Infinity) and **out-of-double-domain** values
+//!    — numeric tokens that overflow to ±Infinity or underflow to zero while
+//!    carrying a nonzero significand (e.g. `1e400`, `1e-400`) — are rejected.
+//!    Leading-zero integers (`01`), a leading `+`, and malformed numeric tokens
+//!    are rejected.
 //! 4. **No Unicode normalization / no parser repair** — code points pass through
 //!    unchanged.
 //!
+//! Unlike MCP-S's canonicalizer — which intentionally uses an INTEGER-ONLY safety
+//! profile for the signed protocol envelopes whose numeric domain it controls —
+//! MTCI implements full RFC 8785/JCS because tool descriptors carry arbitrary
+//! JSON Schema (finite floats like `minimum`/`multipleOf`). The two domains are
+//! deliberately different and MUST NOT be unified: doing so would either
+//! over-restrict MTCI or weaken MCP-S. MTCI canonicalizes numbers as IEEE-754
+//! doubles and does NOT preserve arbitrary decimal precision; descriptors needing
+//! exact high-precision decimals should encode them as strings (RFC 8785 I-JSON).
+//!
 //! # Canonical output (RFC 8785)
 //! - Object members sorted by member name using UTF-16 code-unit ordering.
-//! - Integers in shortest decimal form, no leading zeros, no `+`, `-0` => `0`.
+//! - Numbers serialized via ECMAScript `Number::toString` (finite doubles); `-0`
+//!   => `0`, shortest round-trip significand, no leading `+`.
 //! - Strings escape only `"`, `\`, and control chars U+0000–U+001F (short forms
 //!   `\b \t \n \f \r` where applicable, else `\u00xx` lowercase hex). All other
 //!   code points are emitted as literal UTF-8 bytes — never `\u`-escaped.
@@ -29,17 +45,12 @@
 
 use crate::IntegrityError;
 
-/// The single, uniform canonicalization failure raised by every JCS-safe-domain
-/// violation on this path (mirrors MCP-S's single `CanonicalizationFailed`
-/// variant — this module is vendored verbatim from MCP-S's `canonical.rs` so the
-/// two produce byte-identical output). Centralizing it keeps the fail-closed
-/// contract auditable: canonicalization never falls back to best-effort output.
+/// The single, uniform canonicalization failure raised by every JCS-domain
+/// violation on this path. Centralizing it keeps the fail-closed contract
+/// auditable: canonicalization never falls back to best-effort output.
 fn canon_fail() -> IntegrityError {
-    IntegrityError::Canonicalization("value outside the JCS-safe domain (RFC 8785)".to_string())
+    IntegrityError::Canonicalization("value outside the JCS domain (RFC 8785)".to_string())
 }
-
-/// The maximum safe integer magnitude, ±(2^53 − 1), per the JCS-safe domain.
-const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991; // 2^53 - 1
 
 /// Maximum container-nesting depth accepted by either recursive parse path
 /// (MCPS-073). Matches `serde_json`'s default `recursion_limit` so the raw-bytes
@@ -59,8 +70,10 @@ pub enum JcsValue {
     Null,
     /// JSON `true` / `false`.
     Bool(bool),
-    /// A safe integer in ±(2^53 − 1).
-    Integer(i64),
+    /// A JSON number, held as a FINITE IEEE-754 double per RFC 8785 / I-JSON.
+    /// Non-finite values (NaN, ±Infinity) are never produced by the parsers and
+    /// are rejected at serialization time on the public hand-constructible path.
+    Number(f64),
     /// A JSON string (already validated UTF-8, surrogate-paired).
     String(String),
     /// A JSON array.
@@ -73,7 +86,7 @@ pub enum JcsValue {
 /// canonical UTF-8 bytes.
 ///
 /// On any domain violation (duplicate keys, invalid UTF-8, unpaired surrogate,
-/// non-integer / out-of-range number, malformed JSON) returns
+/// non-finite / out-of-double-domain number, malformed JSON) returns
 /// [`IntegrityError::Canonicalization`].
 pub fn canonicalize(input: &[u8]) -> Result<Vec<u8>, IntegrityError> {
     let value = parse(input)?;
@@ -122,14 +135,14 @@ pub fn canonicalize_value(value: &JcsValue) -> Result<Vec<u8>, IntegrityError> {
 /// duplicate-key check is therefore the responsibility of the raw-bytes
 /// [`parse`]/[`canonicalize`] path, which MUST be run on the original wire bytes
 /// before any `serde_json::Value` is derived. This helper still enforces the
-/// rest of the JCS-safe domain (integers-only/in-range, valid strings).
+/// rest of the JCS domain (finite numbers only, valid strings).
 pub fn canonicalize_json_value(value: &serde_json::Value) -> Result<Vec<u8>, IntegrityError> {
     let jcs = from_serde_value(value)?;
     canonicalize_value(&jcs)
 }
 
 /// Convert a `serde_json::Value` into a validated [`JcsValue`], enforcing the
-/// integer-only/in-range number rule. Cannot detect duplicate keys (see
+/// finite-double number rule. Cannot detect duplicate keys (see
 /// [`canonicalize_json_value`]).
 fn from_serde_value(value: &serde_json::Value) -> Result<JcsValue, IntegrityError> {
     // Bound recursion identically to the raw-bytes path (MCPS-073). depth counts
@@ -144,21 +157,14 @@ fn from_serde_value_at(value: &serde_json::Value, depth: usize) -> Result<JcsVal
         serde_json::Value::Null => Ok(JcsValue::Null),
         serde_json::Value::Bool(b) => Ok(JcsValue::Bool(*b)),
         serde_json::Value::Number(n) => {
-            // Reject any non-integer (serde_json without arbitrary_precision
-            // models numbers as i64/u64/f64). A float that is not integral, or
-            // an integer outside the safe range, is rejected.
-            if let Some(i) = n.as_i64() {
-                check_safe_integer(i)?;
-                Ok(JcsValue::Integer(i))
-            } else if let Some(u) = n.as_u64() {
-                if u > MAX_SAFE_INTEGER as u64 {
-                    return Err(canon_fail());
-                }
-                Ok(JcsValue::Integer(u as i64))
-            } else {
-                // f64 (fractional or exponent or out-of-i64/u64-range) => reject.
-                Err(canon_fail())
+            // RFC 8785 / I-JSON: every JSON number is an IEEE-754 double. serde_json
+            // (without arbitrary_precision) cannot hold NaN/Inf, and as_f64 of a large
+            // integer yields its double approximation — the I-JSON stance, accepted.
+            let f = n.as_f64().ok_or_else(canon_fail)?;
+            if !f.is_finite() {
+                return Err(canon_fail());
             }
+            Ok(JcsValue::Number(f))
         }
         serde_json::Value::String(s) => Ok(JcsValue::String(s.clone())),
         serde_json::Value::Array(items) => {
@@ -184,14 +190,6 @@ fn from_serde_value_at(value: &serde_json::Value, depth: usize) -> Result<JcsVal
     }
 }
 
-fn check_safe_integer(i: i64) -> Result<(), IntegrityError> {
-    if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&i) {
-        Ok(())
-    } else {
-        Err(canon_fail())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Canonical serialization (RFC 8785 output rules).
 // ---------------------------------------------------------------------------
@@ -210,7 +208,7 @@ fn write_value(value: &JcsValue, depth: usize, out: &mut String) -> Result<(), I
         JcsValue::Null => out.push_str("null"),
         JcsValue::Bool(true) => out.push_str("true"),
         JcsValue::Bool(false) => out.push_str("false"),
-        JcsValue::Integer(i) => write_integer(*i, out),
+        JcsValue::Number(x) => write_number(*x, out)?,
         JcsValue::String(s) => write_string(s, out),
         JcsValue::Array(items) => {
             if depth >= MAX_PARSE_DEPTH {
@@ -258,12 +256,60 @@ fn write_value(value: &JcsValue, depth: usize, out: &mut String) -> Result<(), I
     Ok(())
 }
 
-/// Shortest decimal form: no leading zeros, no `+`, `-0` normalized to `0`.
-/// Rust's integer `Display` already yields this for `i64` (and `0` for `-0`,
-/// which cannot exist as a distinct `i64`).
-fn write_integer(i: i64, out: &mut String) {
-    use std::fmt::Write;
-    let _ = write!(out, "{i}");
+/// Serialize a finite IEEE-754 double per RFC 8785 §3.2.2.3 (the ECMAScript
+/// `Number::toString` algorithm). Rust's `format!("{:e}", _)` supplies the
+/// shortest round-trip significand and decimal exponent; this routine then
+/// applies the ECMAScript positional/exponential formatting rules.
+///
+/// Non-finite values (which the parsers never produce, but a hand-built
+/// `JcsValue::Number(f64::NAN)` could carry) fail closed.
+fn write_number(x: f64, out: &mut String) -> Result<(), IntegrityError> {
+    if !x.is_finite() {
+        return Err(canon_fail());
+    }
+    if x == 0.0 {
+        // Covers both +0.0 and -0.0 => "0".
+        out.push('0');
+        return Ok(());
+    }
+    if x < 0.0 {
+        out.push('-');
+    }
+    // Rust shortest round-trip: "<mant>e<exp>", mant first digit nonzero,
+    // no trailing zeros.
+    let sci = format!("{:e}", x.abs());
+    let (mant, exp_str) = sci.split_once('e').ok_or_else(canon_fail)?;
+    let exp: i32 = exp_str.parse().map_err(|_| canon_fail())?;
+    // Significand digits only (drop the '.'); ASCII, so byte indexing is safe.
+    let digits: String = mant.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = exp + 1; // position of the decimal point relative to `digits`.
+    if k <= n && n <= 21 {
+        out.push_str(&digits);
+        out.push_str(&"0".repeat((n - k) as usize));
+    } else if 0 < n && n <= 21 {
+        out.push_str(&digits[0..n as usize]);
+        out.push('.');
+        out.push_str(&digits[n as usize..]);
+    } else if -6 < n && n <= 0 {
+        out.push_str("0.");
+        out.push_str(&"0".repeat((-n) as usize));
+        out.push_str(&digits);
+    } else {
+        // n > 21 or n <= -6 => exponential form.
+        let mant2 = if k == 1 {
+            digits.clone()
+        } else {
+            format!("{}.{}", &digits[0..1], &digits[1..])
+        };
+        let e = n - 1;
+        let esign = if e >= 0 { "+" } else { "-" };
+        out.push_str(&mant2);
+        out.push('e');
+        out.push_str(esign);
+        out.push_str(&e.abs().to_string());
+    }
+    Ok(())
 }
 
 /// Escape per RFC 8785: only `"`, `\`, and control chars U+0000–U+001F; short
@@ -548,8 +594,15 @@ impl<'a> Parser<'a> {
         Ok(value)
     }
 
-    /// Parse a JSON number, enforcing the integers-only / in-range rule. Any
-    /// fraction or exponent is rejected.
+    /// Parse a JSON number over the FULL RFC 8259 / I-JSON grammar and accept any
+    /// finite IEEE-754 double (RFC 8785 number domain). The grammar is: optional
+    /// `-`, integer part (`0` alone OR `[1-9][0-9]*` — leading zeros rejected),
+    /// optional fraction `. [0-9]+`, optional exponent `[eE][+-]?[0-9]+`. A leading
+    /// `+` is rejected (the grammar only consumes `-`).
+    ///
+    /// Out-of-double-domain tokens fail closed: a token that overflows to ±Infinity,
+    /// or one that underflows to `0.0` while its significand carries a nonzero digit
+    /// (e.g. `1e-400`), is rejected.
     fn parse_number(&mut self) -> Result<JcsValue, IntegrityError> {
         let start = self.pos;
         if self.peek() == Some('-') {
@@ -572,16 +625,53 @@ impl<'a> Parser<'a> {
             }
             _ => return Err(canon_fail()),
         }
-        // Reject fraction or exponent => non-integer number.
-        if matches!(self.peek(), Some('.') | Some('e') | Some('E')) {
-            return Err(canon_fail());
+        // Optional fraction: '.' followed by one or more digits.
+        if self.peek() == Some('.') {
+            self.bump();
+            let mut saw_digit = false;
+            while let Some(d) = self.peek() {
+                if d.is_ascii_digit() {
+                    self.bump();
+                    saw_digit = true;
+                } else {
+                    break;
+                }
+            }
+            if !saw_digit {
+                return Err(canon_fail());
+            }
+        }
+        // Optional exponent: [eE], optional sign, one or more digits.
+        if matches!(self.peek(), Some('e') | Some('E')) {
+            self.bump();
+            if matches!(self.peek(), Some('+') | Some('-')) {
+                self.bump();
+            }
+            let mut saw_digit = false;
+            while let Some(d) = self.peek() {
+                if d.is_ascii_digit() {
+                    self.bump();
+                    saw_digit = true;
+                } else {
+                    break;
+                }
+            }
+            if !saw_digit {
+                return Err(canon_fail());
+            }
         }
         let token: String = self.chars[start..self.pos].iter().collect();
-        let parsed: i64 = token
-            .parse()
-            .map_err(|_| canon_fail())?;
-        check_safe_integer(parsed)?;
-        Ok(JcsValue::Integer(parsed))
+        let parsed: f64 = token.parse().map_err(|_| canon_fail())?;
+        if !parsed.is_finite() {
+            // Overflow to ±Infinity (e.g. `1e400`).
+            return Err(canon_fail());
+        }
+        if parsed == 0.0 && token.bytes().any(|b| (b'1'..=b'9').contains(&b)) {
+            // Underflow to zero while the significand carries a nonzero digit
+            // (e.g. `1e-400`): outside the representable double domain.
+            return Err(canon_fail());
+        }
+        Ok(JcsValue::Number(parsed))
     }
 }
 
@@ -599,7 +689,7 @@ mod tests {
         canonicalize(input.as_bytes()).map(|b| String::from_utf8(b).expect("utf8"))
     }
 
-    // ---- JCS-01..08 from MCPS_SPEC §10 ----
+    // ---- JCS domain: duplicate keys / surrogates / UTF-8 / large-ids ----
 
     #[test]
     fn jcs_01_duplicate_key_rejected() {
@@ -613,41 +703,84 @@ mod tests {
         assert_eq!(err, canon_fail());
     }
 
+    // ---- RFC 8785 finite-number vectors (full JCS, not integer-only) ----
+
     #[test]
-    fn jcs_02_unsafe_integer_value_rejected() {
-        let err = canonicalize(b"9007199254740993").unwrap_err();
-        assert_eq!(err, canon_fail());
+    fn rfc8785_number_vectors() {
+        // The canonical decimal/exponent forms below are RFC-8785-correct and MUST
+        // match exactly; a mismatch means write_number is wrong.
+        assert_eq!(canon_str("4.50").unwrap(), "4.5");
+        assert_eq!(canon_str("0.002").unwrap(), "0.002");
+        assert_eq!(canon_str("1e30").unwrap(), "1e+30");
+        assert_eq!(canon_str("1e-27").unwrap(), "1e-27");
+        assert_eq!(canon_str("333333333.33333329").unwrap(), "333333333.3333333");
+        assert_eq!(canon_str("100").unwrap(), "100");
+        assert_eq!(canon_str("0").unwrap(), "0");
+        assert_eq!(canon_str("-0").unwrap(), "0");
     }
 
     #[test]
-    fn jcs_02_unsafe_integer_in_object_rejected() {
-        let err = canonicalize(br#"{"id":9007199254740993}"#).unwrap_err();
-        assert_eq!(err, canon_fail());
+    fn non_integer_number_accepted() {
+        // Was rejected under the integer-only profile; now accepted (full JCS).
+        assert_eq!(canon_str("1.5").unwrap(), "1.5");
     }
 
     #[test]
-    fn jcs_03_unsafe_integer_nested_in_array_rejected() {
-        let err = canonicalize(br#"{"args":[1,2,9007199254740993]}"#).unwrap_err();
-        assert_eq!(err, canon_fail());
+    fn exponent_number_accepted_as_ecmascript_form() {
+        // Was rejected under the integer-only profile; now accepted and rendered
+        // in ECMAScript Number::toString form.
+        assert_eq!(canon_str("1e3").unwrap(), "1000");
+        assert_eq!(canon_str("1E3").unwrap(), "1000");
     }
 
     #[test]
-    fn safe_integer_boundary_accepted() {
-        // 2^53 - 1 is the inclusive max.
+    fn large_integer_accepted_as_double() {
+        // 2^53 + 1 = 9007199254740993 is NOT representable as a double; per I-JSON
+        // it is accepted and canonicalizes to its nearest double, 2^53 =
+        // 9007199254740992 (pinned from the actual ECMAScript output).
+        assert_eq!(canon_str("9007199254740993").unwrap(), "9007199254740992");
+        // 2^53 - 1 round-trips exactly.
         assert_eq!(canon_str("9007199254740991").unwrap(), "9007199254740991");
         assert_eq!(canon_str("-9007199254740991").unwrap(), "-9007199254740991");
     }
 
     #[test]
-    fn jcs_04_non_integer_number_rejected() {
-        let err = canonicalize(b"1.5").unwrap_err();
-        assert_eq!(err, canon_fail());
+    fn json_schema_decimals_accepted() {
+        assert_eq!(canon_str(r#"{"minimum":0.5}"#).unwrap(), r#"{"minimum":0.5}"#);
+        assert_eq!(
+            canon_str(r#"{"multipleOf":0.1}"#).unwrap(),
+            r#"{"multipleOf":0.1}"#
+        );
     }
 
     #[test]
-    fn jcs_05_exponent_number_rejected() {
-        assert_eq!(canonicalize(b"1e3").unwrap_err(), canon_fail());
-        assert_eq!(canonicalize(b"1E3").unwrap_err(), canon_fail());
+    fn realistic_descriptor_with_floats_canonicalizes_sorted() {
+        let input = r#"{"inputSchema":{"properties":{"temp":{"type":"number","default":0.5,"minimum":-1.5}}},"name":"x"}"#;
+        let out = canon_str(input);
+        assert!(out.is_ok());
+        // Top-level keys are already sorted (inputSchema < name); the nested
+        // descriptor-property keys sort to default < minimum < type.
+        assert_eq!(
+            out.unwrap(),
+            r#"{"inputSchema":{"properties":{"temp":{"default":0.5,"minimum":-1.5,"type":"number"}}},"name":"x"}"#
+        );
+    }
+
+    #[test]
+    fn number_overflow_rejected() {
+        assert!(canonicalize(b"1e400").is_err());
+    }
+
+    #[test]
+    fn number_underflow_rejected() {
+        assert!(canonicalize(b"1e-400").is_err());
+    }
+
+    #[test]
+    fn constructed_non_finite_number_rejected() {
+        assert!(canonicalize_value(&JcsValue::Number(f64::NAN)).is_err());
+        assert!(canonicalize_value(&JcsValue::Number(f64::INFINITY)).is_err());
+        assert!(canonicalize_value(&JcsValue::Number(f64::NEG_INFINITY)).is_err());
     }
 
     #[test]
@@ -805,15 +938,21 @@ mod tests {
     }
 
     #[test]
-    fn json_value_helper_rejects_non_integer() {
+    fn json_value_helper_accepts_float() {
+        // Full JCS: a fractional value is accepted on the serde path too.
         let v: serde_json::Value = serde_json::from_str("1.5").unwrap();
-        assert_eq!(canonicalize_json_value(&v).unwrap_err(), canon_fail());
+        assert_eq!(canonicalize_json_value(&v).unwrap(), b"1.5");
     }
 
     #[test]
-    fn json_value_helper_rejects_unsafe_integer() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"id":9007199254740993}"#).unwrap();
-        assert_eq!(canonicalize_json_value(&v).unwrap_err(), canon_fail());
+    fn json_value_helper_matches_raw_path_for_valid_float_input() {
+        // A float-containing input must canonicalize identically via the raw-bytes
+        // path and the serde_json::Value path.
+        let input = r#"{"z":1,"a":{"y":"é","x":0.5},"id":"9007199254740993"}"#;
+        let raw = canonicalize(input.as_bytes()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(input).unwrap();
+        let via_value = canonicalize_json_value(&v).unwrap();
+        assert_eq!(raw, via_value);
     }
 
     #[test]
@@ -911,13 +1050,13 @@ mod tests {
     // public `canonicalize_value`.
 
     /// Build a value tree of exactly `n` nested `JcsValue::Array` containers
-    /// around an `Integer(0)` leaf, BOTTOM-UP and iteratively (heap, no stack
+    /// around a `Number(0.0)` leaf, BOTTOM-UP and iteratively (heap, no stack
     /// recursion) so neither construction nor this test overflows. The outermost
     /// array is the one handed to `canonicalize_value` (serializer depth 0); the
     /// innermost is reached at serializer depth `n - 1`, matching the parser's
     /// depth accounting where `n` brackets reach depth `n - 1`.
     fn nested_array(n: usize) -> JcsValue {
-        let mut v = JcsValue::Integer(0);
+        let mut v = JcsValue::Number(0.0);
         for _ in 0..n {
             v = JcsValue::Array(vec![v]);
         }
@@ -974,8 +1113,8 @@ mod tests {
         // must re-enforce it (MCPS-092), mirroring the depth-bound treatment,
         // rather than emitting the duplicated key twice.
         let dup = JcsValue::Object(vec![
-            ("a".to_string(), JcsValue::Integer(1)),
-            ("a".to_string(), JcsValue::Integer(2)),
+            ("a".to_string(), JcsValue::Number(1.0)),
+            ("a".to_string(), JcsValue::Number(2.0)),
         ]);
         assert_eq!(
             canonicalize_value(&dup).unwrap_err(),
@@ -989,8 +1128,8 @@ mod tests {
         // keys must still canonicalize, proving the rejection is keyed on
         // duplication, not a blanket Object failure.
         let ok = JcsValue::Object(vec![
-            ("a".to_string(), JcsValue::Integer(1)),
-            ("b".to_string(), JcsValue::Integer(2)),
+            ("a".to_string(), JcsValue::Number(1.0)),
+            ("b".to_string(), JcsValue::Number(2.0)),
         ]);
         canonicalize_value(&ok).expect("distinct-keyed object must canonicalize");
     }

@@ -24,13 +24,15 @@ pub fn hash_id(bytes: &[u8]) -> String {
 
 /// Reduce a JSON value to its RFC 8785 (JCS) canonical byte form.
 ///
-/// Delegates to the vendored RFC 8785 canonicalizer ([`crate::canonical`], copied
-/// verbatim from MCP-S so the two emit byte-identical output): object members
-/// sorted by UTF-16 code-unit order, integer-only numbers in shortest decimal
-/// form, minimal string escaping, and no insignificant whitespace.
+/// Delegates to the in-house RFC 8785 canonicalizer ([`crate::canonical`]): object
+/// members sorted by UTF-16 code-unit order, finite numbers serialized via the
+/// ECMAScript `Number::toString` algorithm, minimal string escaping, and no
+/// insignificant whitespace. (MTCI uses the FULL RFC 8785 number domain — finite
+/// doubles, including the JSON Schema floats that descriptors carry — not MCP-S's
+/// integer-only profile.)
 ///
-/// Canonicalization is **fail-closed**: any value outside the JCS-safe domain (a
-/// fractional / exponent / out-of-range number, an invalid string, or nesting
+/// Canonicalization is **fail-closed**: any value outside the JCS domain (a
+/// non-finite or out-of-double-domain number, an invalid string, or nesting
 /// beyond the depth bound) yields [`IntegrityError::Canonicalization`] rather than
 /// a best-effort encoding, satisfying §2 of the profile spec.
 ///
@@ -93,6 +95,18 @@ mod tests {
         let a = json!({"name": "echo", "description": "Echo input"});
         let b = json!({"name": "echo", "description": "Echo input (changed)"});
         assert_ne!(descriptor_hash(&a).unwrap(), descriptor_hash(&b).unwrap());
+    }
+
+    #[test]
+    fn descriptor_hash_handles_float_schema_and_detects_float_change() {
+        // A JSON Schema float (minimum: 0.5) must hash successfully under full
+        // RFC 8785, and a different float must yield a different hash.
+        let a = json!({"name": "x", "inputSchema": {"minimum": 0.5}});
+        let b = json!({"name": "x", "inputSchema": {"minimum": 0.6}});
+        let ha = descriptor_hash(&a).unwrap();
+        let hb = descriptor_hash(&b).unwrap();
+        assert!(ha.starts_with("sha256:"));
+        assert_ne!(ha, hb);
     }
 
     #[test]
